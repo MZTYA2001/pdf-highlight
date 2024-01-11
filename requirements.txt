@@ -1,5 +1,5 @@
 beautifulsoup4
-fitz
+PyMuPDF
 langchain
 langchain_community
 langchain_core
