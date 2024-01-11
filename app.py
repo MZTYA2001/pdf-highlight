@@ -1,6 +1,6 @@
 from calendar import c
 import re
-import bs4
+from bs4 import BeautifulSoup
 from langchain import hub
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.document_loaders import UnstructuredPDFLoader
