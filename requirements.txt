@@ -11,3 +11,4 @@ unstructured
 pdf2image
 numpy
 opencv-python-headless
+nstructured_inference
