@@ -9,4 +9,4 @@ PyPDF2
 streamlit
 unstructured
 pdf2image
-cv2
+opencv-python
