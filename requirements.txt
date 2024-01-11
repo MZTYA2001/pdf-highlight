@@ -7,3 +7,4 @@ langchain_openai
 pdfplumber
 PyPDF2
 streamlit
+unstructured
