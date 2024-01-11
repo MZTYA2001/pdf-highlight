@@ -12,3 +12,4 @@ pdf2image
 numpy
 opencv-python-headless
 unstructured_inference
+libgl1
