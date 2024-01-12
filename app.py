@@ -1,6 +1,8 @@
 from calendar import c
 import re
+import tempfile
 from bs4 import BeautifulSoup
+from openai import OpenAI
 from langchain import hub
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.document_loaders import UnstructuredPDFLoader
@@ -13,11 +15,30 @@ import fitz
 import os
 import pdfplumber
 from symbol import term
+import PyPDF2
 
+
+class PDFUploader:
+    def __init__(self):
+        self.pdf_file = None
+        self.text = ""
+
+    def upload_pdf(self):
+        # Upload a PDF file
+        self.pdf_file = st.file_uploader("Upload your PDF", type='pdf')
+        return self.pdf_file
+
+    def process_pdf(self):
+        # Process the uploaded PDF file
+        if self.pdf_file is not None:
+            pdf_reader = PyPDF2.PdfReader(self.pdf_file)
+            for page in pdf_reader.pages:
+                self.text += page.extract_text()
+            return self.text
 
 class PDFContextExtractor:
-    def __init__(self, pdf_path, model_name="gpt-3.5-turbo", temperature=0):
-        self.pdf_path = pdf_path
+    def __init__(self, pdf_file, model_name="gpt-3.5-turbo", temperature=0):
+        self.pdf_file = pdf_file
         self.model_name = model_name
         self.temperature = temperature
         self.vectorstore = None
@@ -25,7 +46,15 @@ class PDFContextExtractor:
         self.last_context = ""
 
     def load_and_index_pdf(self):
-        loader = UnstructuredPDFLoader(self.pdf_path)
+        if self.pdf_file is None:
+            return
+        
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmpfile:
+            tmpfile.write(self.pdf_file.getbuffer())
+            tmp_pdf_path = tmpfile.name
+
+        # Use the temporary file path for the loader
+        loader = UnstructuredPDFLoader(tmp_pdf_path)
         docs = loader.load()
 
         text_splitter = RecursiveCharacterTextSplitter(
@@ -67,6 +96,14 @@ class PDFSearchAndDisplay:
         self.context_pages = []
 
     def find_highlight_and_screenshot_context(self, pdf_path, context, output_folder):
+        # Delete any existing folder with screenshots
+        if os.path.exists(output_folder):
+            for file_name in os.listdir(output_folder):
+                file_path = os.path.join(output_folder, file_name)
+                if os.path.exists(file_path):
+                    os.remove(file_path)
+            os.rmdir(output_folder)
+            
         if not os.path.exists(output_folder):
             os.makedirs(output_folder)
 
@@ -117,48 +154,66 @@ class PDFSearchAndDisplay:
                         break  # Exit if the end of the context is reached
 
 
-pdf_path = "chapter_9_Java236.pdf"
-output_folder = "screenshots"
+client = OpenAI()
+OpenAI.api_key = os.getenv("OPENAI_API_KEY")
 
-# Initialize the extractor
-pdf_extractor = PDFContextExtractor(
-    pdf_path=pdf_path, model_name="gpt-3.5-turbo", temperature=0
-)
 
-# Load and index the PDF
-pdf_extractor.load_and_index_pdf()
+# Function to create a label using OpenAI's GPT-3.5-Turbo model
+def create_label(pdf_name):
+    response = client.chat.completions.create(
+        model="gpt-3.5-turbo",
+        messages=[
+            {"role": "system", "content": "You are a helpful assistant."},
+            {"role": "user", "content": f"Create a label for {pdf_name}."},
+        ],
+        stop=["\n"],
+    )
+    print(response)
+    return response.choices[0].message.content
 
-# Streamlit interface
+
+# Streamlit app
 st.title("GPT-4-PDF Demo")
+pdf_uploader = PDFUploader()
+uploaded_pdf = pdf_uploader.upload_pdf()
 
-# Text input for the question
-# Use regex to turn pdf_path into a string that can be used as a label
-label = re.sub(r"[^a-zA-Z0-9]", "_", pdf_path)
-user_input = st.text_input(f"Ask a question about {label}")
-if user_input:
-    answer = pdf_extractor.invoke(user_input)
-    context = pdf_extractor.last_context
+if uploaded_pdf is not None:
+    if 'label' not in st.session_state or uploaded_pdf.name != st.session_state.get('pdf_name', ''):
+        st.session_state.label = create_label(uploaded_pdf.name)
+        st.session_state.pdf_name = uploaded_pdf.name
 
-    # Display the answer
-    st.write(f"Answer: {answer}")
+    pdf_uploader.process_pdf()
+    pdf_extractor = PDFContextExtractor(uploaded_pdf, "gpt-3.5-turbo", 0)
+    pdf_extractor.load_and_index_pdf()
 
-    find = f"""{context}"""
+    user_input = st.text_input(f"Ask a question about {st.session_state.label}:") if st.session_state.label else st.text_input("Ask a question:")
 
-    # Collapsible section for screenshots
-    with st.expander("Screenshots", expanded=False):
-        pdf_search = PDFSearchAndDisplay(pdf_path)
-        pdf_search.find_highlight_and_screenshot_context(pdf_path, find, output_folder)
+    if user_input:
+        answer = pdf_extractor.invoke(user_input)
+        context = pdf_extractor.last_context
 
-        # Dynamically list the files in the screenshots directory
-        screenshot_files = [f for f in os.listdir(output_folder) if f.endswith(".png")]
-        for file_name in screenshot_files:
-            file_path = os.path.join(output_folder, file_name)
-            if os.path.exists(file_path):
-                st.image(file_path)
+        # Display the answer
+        st.write(f"Answer: {answer}")
 
-    # Collapsible section for context
-    with st.expander("Context", expanded=False):
-        st.write(context)
+        find = f"""{context}"""
 
-# Cleanup
-pdf_extractor.cleanup()
+        # Collapsible section for screenshots
+        with st.expander("Screenshots", expanded=False):
+            pdf_search = PDFSearchAndDisplay(uploaded_pdf)
+            pdf_search.find_highlight_and_screenshot_context(
+                uploaded_pdf, find, "screenshots"
+            )
+
+            # Dynamically list the files in the screenshots directory
+            screenshot_files = [f for f in os.listdir("screenshots")]
+            for file_name in screenshot_files:
+                file_path = os.path.join("screenshots", file_name)
+                if os.path.exists(file_path):
+                    st.image(file_path)
+
+        # Collapsible section for context
+        with st.expander("Context", expanded=False):
+            st.write(context)
+
+    # Cleanup
+    pdf_extractor.cleanup()
